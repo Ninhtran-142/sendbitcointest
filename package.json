@@ -15,6 +15,7 @@
     "bip39": "^3.1.0",
     "bitcoinjs-lib": "^6.1.6",
     "ecpair": "^2.1.0",
-    "tiny-secp256k1": "^2.2.3"
+    "tiny-secp256k1": "^2.2.3",
+    "varuint-bitcoin": "^2.0.0"
   }
 }
