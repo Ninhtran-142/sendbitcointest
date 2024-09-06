@@ -28,7 +28,7 @@ const sendBitcoin = async (receiverAddress, amountToSend) => {
     let inputCount = 0;
     //input 
     for (const utxo of utxos) {
-      if((inputCount*180 + 2*34 + 10)*feeRate + totalAmountAvailable < satoshiToSend){
+      if((inputCount*180 + 2*34 + 10)*feeRate + satoshiToSend >  totalAmountAvailable){
         const hexRespone = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
         transHex = hexRespone.data;
         psbt.addInput({
@@ -141,7 +141,7 @@ const sendBitcoinP2TR = async (receiverAddress,amountToSend) => {
 
     //input 
     for (const utxo of utxos) {
-      if((inputCount*58 + 2*43 + 11)*feeRate + totalAmountAvailable < satoshiToSend){
+      if((inputCount*58 + 2*43 + 11)*feeRate + satoshiToSend > totalAmountAvailable){
         const hexRespone = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
         transHex = hexRespone.data;
         psbt.addInput({

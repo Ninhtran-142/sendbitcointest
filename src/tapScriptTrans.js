@@ -3,6 +3,10 @@ const bitcoin = require('bitcoinjs-lib');
 const ECPairFactory = require('ecpair');
 const ecc = require('tiny-secp256k1');
 const { witnessStackToScriptWitness } =require("bitcoinjs-lib/src/psbt/psbtutils")
+const{ Taptree } = require("bitcoinjs-lib/src/types")
+
+const varuint = require('varuint-bitcoin');
+const { Buffer } = require('buffer');
 
 const network = bitcoin.networks.testnet;
 
@@ -27,25 +31,32 @@ const tapScriptTrans = async (receiverAddress, amountToSend, spendMethod) =>{
         const hash_script_asm = `OP_HASH160 ${hash.toString('hex')} OP_EQUALVERIFY ${toXOnly(hash_lock_keypair.publicKey).toString('hex')} OP_CHECKSIG`;
         const hash_lock_script = bitcoin.script.fromASM(hash_script_asm);
 
+        console.log("hash lock asm",hash_script_asm);
+        console.log("hash lock script",hash_lock_script);
+      
         const p2pk_script_asm = `${toXOnly(keyPair.publicKey).toString('hex')} OP_CHECKSIG`;
         const p2pk_script = bitcoin.script.fromASM(p2pk_script_asm);
 
-        const scriptTree = [
-            { output: hash_lock_script },
-            { output: p2pk_script }
-        ];
+      /*  const scriptTree =  [
+          {
+              output: hash_lock_script
+          },
+          {
+              output: p2pk_script
+          }
+      ];*/
         let psbt;
         if (spendMethod === 'hashlock') {
-            psbt = await spendWithHashLock(receiverAddress,sourceAddress,satoshiToSend,keyPair, hash_lock_keypair, secret_bytes, scriptTree,hash_lock_script);
+            psbt = await spendWithHashLock(receiverAddress,sourceAddress,satoshiToSend,keyPair, hash_lock_keypair, secret_bytes,hash_lock_script);
         } else if (spendMethod === 'p2pk') {
-            psbt = await spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair,scriptTree,p2pk_script);
+            psbt = await spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair,p2pk_script);
         } else {
             throw new Error('Invalid spend method');
         }
 
         const txHex = psbt.extractTransaction().toHex();
         console.log(txHex);
-        const result = await axios.post(`https://mempool.space/testnet/api/tx`, txHex);
+        const result = await axios.post(`https://mempool.space/signet/api/tx`, txHex);
         return result.data;
     } catch (error) {
         console.log(error);
@@ -54,35 +65,36 @@ const tapScriptTrans = async (receiverAddress, amountToSend, spendMethod) =>{
 module.exports = {
     tapScriptTrans
   }
-async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair,scriptTree,p2pk_script) {
-    const p2pk_redeem = {
+async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair,p2pk_script) {
+    const scriptTree = {
         output: p2pk_script,
         redeemVersion: 192
     }
 
-    const p2pk_p2tr = payments.p2tr({
+    const p2pk_p2tr = bitcoin.payments.p2tr({
         internalPubkey: toXOnly(keyPair.publicKey),
         scriptTree,
-        redeem: p2pk_redeem,
+        redeem: scriptTree,
         network
     });
-    const utxosResponse = await axios.get(`https://mempool.space/testnet/api/address/${sourceAddress}/utxo`);
+    const utxosResponse = await axios.get(`https://mempool.space/signet/api/address/${sourceAddress}/utxo`);
     const utxos = utxosResponse.data;
     utxos.sort((a, b) => b.value - a.value);
     console.log(utxos);
 
     const psbt = new bitcoin.Psbt({ network });//build transaction 
     const psbt1 = new bitcoin.Psbt({ network });
-    const feeRateResponse = await axios.get('https://mempool.space/testnet/api/v1/fees/recommended');
+    const feeRateResponse = await axios.get('https://mempool.space/signet/api/v1/fees/recommended');
     const feeRate = feeRateResponse.data.hourFee; // satoshis per byte
+    console.log("feeRate:",feeRate);
+    
     let totalAmountAvailable = 0;
     let inputCount = 0;
 
     //input 
     for (const utxo of utxos) {
-      if((inputCount*58 + 2*43 + 11)*feeRate + totalAmountAvailable < satoshiToSend){
-        const hexRespone = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
-        transHex = hexRespone.data;
+      if((inputCount*58 + 2*43 + 11)*feeRate + satoshiToSend > totalAmountAvailable){
+        
         psbt.addInput({
           hash: utxo.txid,
           index: utxo.vout,
@@ -91,8 +103,8 @@ async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair
             value: utxo.value,
           },
           tapLeafScript: [{
-            leafVersion: p2pk_redeem.redeemVersion,
-            script: p2pk_redeem.output,
+            leafVersion: p2pk_p2tr.redeemVersion,
+            script: p2pk_p2tr.output,
             controlBlock: p2pk_p2tr.witness[p2pk_p2tr.witness.length - 1]
         }]
         });
@@ -105,8 +117,8 @@ async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair
             value: utxo.value,
           },
           tapLeafScript: [{
-            leafVersion: p2pk_redeem.redeemVersion,
-            script: p2pk_redeem.output,
+            leafVersion: p2pk_p2tr.redeemVersion,
+            script: p2pk_p2tr.output,
             controlBlock: p2pk_p2tr.witness[p2pk_p2tr.witness.length - 1]
         }]
         });
@@ -114,6 +126,8 @@ async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair
       totalAmountAvailable += utxo.value;
     }
   }
+  console.log("totalAmountAvailable:",totalAmountAvailable);
+  
   psbt.addOutput({
     address: receiverAddress,
     value: satoshiToSend,
@@ -140,7 +154,7 @@ async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair
         value: change,
       });
     }
-    await psbt.signAllInputsAsync(keyPair);
+    psbt.signAllInputsAsync(keyPair);
     psbt.finalizeAllInputs();
 
     const size = psbt.extractTransaction().virtualSize();
@@ -154,7 +168,7 @@ async function spendWithP2PK(receiverAddress,sourceAddress,satoshiToSend,keyPair
         value: change1,
       });
     }
-    await psbt1.signAllInputsAsync(keyPair);
+    psbt1.signAllInputsAsync(keyPair);
     psbt1.finalizeAllInputs();
     return psbt1;
 }
@@ -164,11 +178,13 @@ async function spendWithHashLock(receiverAddress,sourceAddress,satoshiToSend,key
         redeemVersion: 192
     };
     const hash_lock_p2tr = bitcoin.payments.p2tr({
-        internalPubkey: toXOnly(keyPair.publicKey),
-        scriptTree,
-        redeem: hash_lock_redeem,
-        network
-    });
+      internalPubkey: toXOnly(keyPair.publicKey),
+      scriptTree,
+      redeem: hash_lock_redeem,
+      network
+  });
+  console.log("hash lock p2tr:",hash_lock_p2tr);
+  
     const utxosResponse = await axios.get(`https://mempool.space/testnet/api/address/${sourceAddress}/utxo`);
     const utxos = utxosResponse.data;
     utxos.sort((a, b) => b.value - a.value);
@@ -178,45 +194,50 @@ async function spendWithHashLock(receiverAddress,sourceAddress,satoshiToSend,key
     const psbt1 = new bitcoin.Psbt({ network });
     const feeRateResponse = await axios.get('https://mempool.space/testnet/api/v1/fees/recommended');
     const feeRate = feeRateResponse.data.hourFee; // satoshis per byte
+    console.log("Fee rate: ", feeRate);
+    
     let totalAmountAvailable = 0;
     let inputCount = 0;
 
     //input 
     for (const utxo of utxos) {
-      if((inputCount*58 + 2*43 + 11)*feeRate + totalAmountAvailable < satoshiToSend){
+      if((inputCount*58 + 2*43 + 11)*feeRate + satoshiToSend > totalAmountAvailable){
         const hexRespone = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
         transHex = hexRespone.data;
         psbt.addInput({
           hash: utxo.txid,
           index: utxo.vout,
           witnessUtxo: {
-            script: hash_lock_p2tr.output ,
-            value: utxo.value,
+              script: hash_lock_p2tr.output,
+              value: utxo.value,
           },
+          tapInternalKey: toXOnly(keyPair.publicKey),
           tapLeafScript: [{
-            leafVersion: hash_lock_redeem.redeemVersion,
-            script: hash_lock_redeem.output,
-            controlBlock: hash_lock_p2tr.witness[hash_lock_p2tr.witness.length - 1]
-        }]
+              leafVersion: hash_lock_redeem.redeemVersion,
+              script: hash_lock_redeem.output,
+              controlBlock: hash_lock_p2tr.witness[hash_lock_p2tr.witness.length - 1]
+          }]
         });
         
         psbt1.addInput({
           hash: utxo.txid,
           index: utxo.vout,
           witnessUtxo: {
-            script: hash_lock_p2tr.output,
-            value: utxo.value,
+              script: hash_lock_p2tr.output,
+              value: utxo.value,
           },
+          tapInternalKey: toXOnly(keyPair.publicKey),
           tapLeafScript: [{
-            leafVersion: hash_lock_redeem.redeemVersion,
-            script: hash_lock_redeem.output,
-            controlBlock: hash_lock_p2tr.witness[hash_lock_p2tr.witness.length - 1]
-        }]
-        });
+              leafVersion: hash_lock_redeem.redeemVersion,
+              script: hash_lock_redeem.output,
+              controlBlock: hash_lock_p2tr.witness[hash_lock_p2tr.witness.length - 1]
+          }]
+      });
       inputCount += 1;
       totalAmountAvailable += utxo.value;
     }
   }
+  console.log("totalAmountAvailable: ",totalAmountAvailable);
   psbt.addOutput({
     address: receiverAddress,
     value: satoshiToSend,
@@ -244,17 +265,17 @@ async function spendWithHashLock(receiverAddress,sourceAddress,satoshiToSend,key
       });
     }
     const customFinalizer = (_inputIndex, input) => {
-        const scriptSolution = [
-            input.tapScriptSig[0].signature,
-            secret_bytes
-        ];
-        const witness = scriptSolution
-            .concat(input.tapLeafScript[0].script)
-            .concat(input.tapLeafScript[0].controlBlock);
-    
-        return {
-            finalScriptWitness: witnessStackToScriptWitness(witness)
-        }
+      const scriptSolution = [
+          input.tapScriptSig[0].signature,
+          secret_bytes
+      ];
+      const witness = scriptSolution
+          .concat(input.tapLeafScript[0].script)
+          .concat(input.tapLeafScript[0].controlBlock);
+  
+      return {
+          finalScriptWitness: witnessStackToScriptWitness(witness)
+      }
     }
     await psbt.signAllInputsAsync(hash_lock_keypair);
     psbt.finalizeAllInputs(customFinalizer);

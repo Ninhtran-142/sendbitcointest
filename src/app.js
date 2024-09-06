@@ -16,7 +16,7 @@ console.log('Public Key:', address.publicKey);
 console.log('Path:', address.path);
 */
 
-tapScriptTrans("tb1pp8qxs6wwxcp4r8k0j3amdcnhslv7ka3lrnxtjkjd2n7se3p4vs0sdkf3hx", 0.0001, 'hashlock')
+tapScriptTrans("tb1pp8qxs6wwxcp4r8k0j3amdcnhslv7ka3lrnxtjkjd2n7se3p4vs0sdkf3hx", 0.0001, 'p2pk')
   .then((result) => {
     console.log(result);
   })
